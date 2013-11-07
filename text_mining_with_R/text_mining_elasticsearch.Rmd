@@ -1,0 +1,175 @@
+Text mining with Elasticsearch database
+========================================================
+
+**[Elasticsearch](http://elasticsearch.org)** is a distributed, RESTful, free/open source search server based on Apache Lucene. Elasticsearch is a **NoSQL** database, which enables to retrieve stored data in **JSON** format using **GET** requests.
+
+R does not provide any tool to directly work with Elasticsearch database (unlike [some SQL databases](http://www.statmethods.net/input/dbinterface.html)) and this post will only show, how to easily retrieve textual data from Elasticsearch and perform basic text mining using package **[tm](http://cran.r-project.org/web/packages/tm/)**.
+
+In following example, we will use database of [github](https://github.com/) users. Every user can write short bio about himself, and we will analyze these. The database runs on localhost and this example is irreproducible, but If you are super interested, you can download crawler, which I have used to fill the database from [here](https://github.com/janoskaz/git_repository_users_mining).
+
+
+```{r include=FALSE, cache=FALSE}
+# necessary libraries
+library(rjson)
+library(RCurl)
+library(tm) # text mining library
+library(ade4) # we will use jaccard distance between documents
+```
+
+Data preparation
+----------------
+
+First, we will see, how many users we have in a database. The database is called `github` and we will retrieve number of documents stored in a mapping called `user`.
+
+```{r}
+# get number of documents in a database
+count <- fromJSON(getURL('http://localhost:9200/github/user/_count'))
+
+n = count$count
+n
+```
+
+Now we can retrieve all documents, and limit our query only to fields `bio` and `login`.
+
+```{r}
+# get all users bio information and name
+url <- paste('http://localhost:9200/github/_search?type=user&fields=bio,login&size=',n,sep='')
+json <- fromJSON(getURL(url))
+```
+
+We are interested only in fields bio and login, which we can easily extract. Also, we will filter only those strings, which are not empty.
+
+```{r}
+# list of individual documents
+lst <- json$hits$hits
+
+# extract description from documents
+desc <- sapply(lst,FUN=function(x) { ifelse(is.null(x$field$bio), '', x$field$bio) } ) # some documents don't have bio description
+names <- unlist(sapply(lst,FUN=function(x)x$fields$login))
+names(desc) <- names
+desc[12] # example of user description
+
+# select only those, which are not empty
+desc <- subset(desc, nchar(desc)>0)
+```
+
+Using library **tm**, we will transform data to class `Corpus`, eliminate whitespaces, english stopwords and lowercase the strings.
+
+```{r}
+# create corpus for tm package
+corpus <- Corpus(VectorSource(desc))
+
+# eliminate extra whitespace
+text <- tm_map(corpus, stripWhitespace)
+
+# convert to lower case
+text <- tm_map(text, tolower)
+
+# remove english stopwords
+text <- tm_map(text, removeWords, stopwords('english'))
+```
+
+Now we can create document-term matrix.
+
+```{r}
+# create document-term matrix
+dtm <- DocumentTermMatrix(text)
+```
+
+Data analysis
+-------------
+
+Let's see, which terms are present in at least 1 % of all documents, and which terms correlate with *ruby* and *javascript*, two most common languages, used by github users.
+
+```{r}
+# which terms are present in at least 1 % of all documents
+findFreqTerms(dtm, round(n/100))
+
+# which terms correlate with ruby?
+findAssocs(dtm, "ruby", 0.35)
+
+# which terms correlate with javascript?
+findAssocs(dtm, "javascript", 0.35)
+```
+
+Clearly -- ruby highly correlates with rails, remaining associations are far less significant.
+
+Clustering
+----------
+
+First, let's reduce the dimensionality of the matrix and select only those terms, which are present in at least 5 documents and than select only those documents, which include at least 5 terms.
+
+```{r}
+# transform to 0-1 matrix
+dtm$v[dtm$v>0] <- 1
+
+dtm <- as.matrix(dtm)
+
+# select those terms, which are present in at least 5 documents
+n_documents <- apply(as.matrix(dtm), 2, sum)
+table(n_documents) # most terms are included only once or twice
+dtm_subset <- subset(dtm, select=n_documents >= 5)
+
+# select those records, which has at least 5 terms
+n_terms <- apply(as.matrix(dtm_subset), 1, sum)
+table(n_terms)
+dtm_subset <- subset(dtm_subset, subset=n_terms >= 5)
+
+# reduction of dimension is substantial
+dim(dtm)
+dim(dtm_subset)
+```
+
+Now we can calculate distances between documents (using jaccard distance) and perform clustering.
+
+```{r fig.width=9, fig.height=6}
+# calculate distance between documents
+# jaccard distance
+dM_documents <- dist.binary(as.matrix(dtm_subset), method=1)
+
+# perform hierarchical clustering of documents
+fit_documents <- hclust(dM_documents, method='single')
+
+plot(fit_documents, labels=FALSE, main='Dendrogram of biographies of github users')
+```
+
+Unfortunately, there seems to be no clear structure, but let's cut the dendrogram in height 0.8 and find clusters with at least 5 users.
+
+```{r}
+# cut dendrogram
+ct <- cutree(fit_documents, h=0.8)
+m <- which(table(ct) > 5) # clusters with more than 10 users
+```
+
+Print names of users in those clusters
+```{r}
+# print names of users
+for (i in m) {
+  print(paste('=== Cluster',i,'==='))
+  n <- names(which(ct==i))
+  print(n)
+}
+```
+
+And we can do the same thing for terms.
+```{r fig.width=9, fig.height=6}
+# calculate distance between terms
+# jaccard distance on transposed matrix
+dM_terms <- dist.binary(t(as.matrix(dtm_subset)), method=1)
+
+# perform hierarchical clustering of terms
+fit_terms <- hclust(dM_terms, method='single')
+
+plot(fit_terms, labels=FALSE, main='Dendrogram of terms in biographies of github users')
+
+# cut dendrogram
+ct <- cutree(fit_terms, h=0.8)
+m <- which(table(ct) > 5) # clusters with more than 10 terms
+
+# print terms in clusters
+for (i in m) {
+  print(paste('=== Cluster',i,'==='))
+  n <- names(which(ct==i))
+  print(n)
+}
+```
