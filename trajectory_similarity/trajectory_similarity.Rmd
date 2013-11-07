@@ -1,0 +1,141 @@
+Trajectory similarity calculation using Dynamic Time Warping
+========================================================
+
+Calculating simmilarity between spatial tracks is a rather complicated task, since trajectories are located in both geographical space and time and can have a number of attributes attached to them. Moreover, attributes can be attached to trajectory as a whole (name of pilot), to individual vetrexes (altitude of plane) or to links (average speed between two recorded locations).
+
+This text will show, how similarity between trajectories in geographical space can be calculated using [Dynamic Time Warping](http://en.wikipedia.org/wiki/Dynamic_time_warping) procedure.
+
+```{r load, message=FALSE}
+library(dtw) # dynamic time warping
+library(sp) # handle spatial objects
+library(rgeos) # geoprocessing functions
+
+# read tracks as data frame
+tracks <- read.delim('track01.dat', header=T, sep='\t', dec=',')
+
+# view data
+str(tracks)
+```
+
+Data frame `tracks` consists of 16 GPS tracks of cars, driving approximately the same route. Every track consists of about 850 points with various attributes, including date, time, position and speed.
+
+```{r geo.transform}
+# convert to spatial object in WGS
+geo_tracks <- tracks
+coordinates(geo_tracks) <- ~ LONGITUDE + LATITUDE
+
+# convert to SpatialLines object
+track_ids <- unique(geo_tracks$TRACK.NUMBER)
+
+sl <- lapply(track_ids, FUN=function(x){
+  crds <- coordinates(subset(geo_tracks,TRACK.NUMBER==x))
+  return(Lines(slinelist=list(Line(coords=crds)), ID=x))
+} )
+
+sl <- SpatialLines(sl)
+
+# all tracks follow the same route
+plot(sl)
+```
+
+By transformation to `SpatialLines`, attribute values for individual vertexes were discarded.
+Dynamic Time Warping is, however, independent on number of dimensions. Following code shows, that the distance between two tracks can be very well calculated using number of attributes.
+
+```{r multiple.dimenstions}
+# take first two tracks - longitude, latitude, altitude and speed of cars
+track1 <- data.frame(lon=tracks$LONGITUDE[tracks$TRACK.NUMBER==1], lat=tracks$LATITUDE[tracks$TRACK.NUMBER==1], alt=tracks$ALTITUDE[tracks$TRACK.NUMBER==1], speed=tracks$SPEED[tracks$TRACK.NUMBER==1])
+
+track2 <- data.frame(lon=tracks$LONGITUDE[tracks$TRACK.NUMBER==2], lat=tracks$LATITUDE[tracks$TRACK.NUMBER==2], alt=tracks$ALTITUDE[tracks$TRACK.NUMBER==2], speed=tracks$SPEED[tracks$TRACK.NUMBER==2])
+
+# calculate distance in all 4 dimensions
+align <- dtw(track1, track2)
+align$distance
+# calculate distance only in geographical space
+align <- dtw(track1[,1:2], track2[,1:2])
+align$distance
+# calculate distance only between speeds
+align <- dtw(track1$speed, track2$speed)
+align$distance
+```
+
+Calculating distance in both attribute and geographical space is, however, not advisable. Every attribute has different units and from the example above it is clear, that variable speed has far greater influence on calculated distance than geographical coordinates.
+
+First, define function to calculate distances between two sets of spatial lines (or between all pair of one set).
+
+```{r trajectory.distance}
+# function to calculate dwt distance between spatial lines
+dtwDistance <- function(spgeom1, spgeom2=NULL) {
+  # if second set of lines is not given, calculate pairwise distances within first set of lines
+  if (is.null(spgeom2)) {
+    
+    # prepare empty distance matrix
+    n_geoms <- length(spgeom1)
+    distmat <- matrix(rep(0,n_geoms**2), ncol=n_geoms)
+    
+    # fill the matrix
+    for(i in 1:(n_geoms-1)) {
+      crds1 <- coordinates(spgeom1[i,])[[1]][[1]]
+      for(j in (i+1):n_geoms){
+        
+        crds2 <- coordinates(spgeom1[j,])[[1]][[1]]
+        align <- dtw(crds1, crds2)
+        distmat[i,j] <- distmat[j,i] <- align$normalizedDistance # normalized distance
+        
+      }
+    }
+    
+# if two sets of lines are given, calculate pairwise distances  
+  } else {
+    
+    # prepare empty distance matrix
+    n_geoms1 <- length(spgeom1)
+    n_geoms2 <- length(spgeom2)
+    distmat <- matrix(rep(0,n_geoms1*n_geoms2), nrow=n_geoms1)
+    
+    # fill the matrix
+    for(i in 1:n_geoms1) {
+      crds1 <- coordinates(spgeom1[i,])[[1]][[1]]
+      for(j in 1:n_geoms2){
+        
+        crds2 <- coordinates(spgeom2[j,])[[1]][[1]]
+        align <- dtw(crds1, crds2)
+        distmat[i,j] <- align$normalizedDistance
+        
+      }
+    }
+    
+  }
+  return(distmat)
+}
+```
+
+Hierarchical clustering clearly shows three different sets of tracks
+
+```{r clustering, cache=TRUE}
+# calculate distance matrix and perform clustering
+dm <- dtwDistance(sl)
+
+fit <- hclust(as.dist(dm),method='single')
+plot(fit, xlab='track number')
+rect.hclust(fit, k=3, border="red") 
+```
+
+Track 15, which is most different from the others, is much shorter than the rest of tracks. Its start and end points are highlighted on the figure below.
+
+```{r track15}
+# plot - highlight track 15, which is most different
+sort(gLength(sl, byid=T)) # track 15 is much shorter
+plot(sl, col=cutree(fit,3), axes=TRUE)
+crds_cl3 <- coordinates(sl[15,])[[1]][[1]]
+points(crds_cl3[c(1,nrow(crds_cl3)),], pch=16, cex=1.6) # highlight start and end points
+```
+
+The difference between clusters 1 and 2 consists in small detour taken by cars in cluster 2, which is highlighted in figure below.
+
+```{r zoom}
+# zoom to area, where is difference between cluster 1 and 2
+plot(sl, col=cutree(fit,3), axes=TRUE, xlim=c(16.52, 16.53),ylim=c(49.29, 49.30))
+legend('topright', legend=c('cluster 1', 'cluster 2', 'cluster 3'), col=c(1,2,3), lty=1)
+```
+
+Overall, Dynamic Time Warping was very succesfull in sorting available tracks info three distinct clusters, whose differences could be easily identified and interpreted. 
