@@ -1,0 +1,153 @@
+Find shortest path in spatial network
+========================================================
+
+This piece follows [this Rpubs document about Spatial networks](http://rpubs.com/edzer/spatialnetworks). Aforementioned text defines class `SpatialLinesNetworks` and shows, that network analysis using [igraph](http://igraph.sourceforge.net/) library can be performed.
+
+This text further presents some functions to easily calculate the shortest path, return it as a `SpatialLines` object and plot it.
+
+Lets assume, that all functions from document, linked above, are stored in file `functions.R`.
+
+```{r load, message=FALSE}
+library(sp)
+library(igraph)
+
+source('functions.R')
+```
+
+Lets use simple network, which was also used by Edzer Pebesma in original document.
+
+```{r define.network}
+# prepare edges and nodes
+l0 = cbind(c(1, 2), c(0, 0))
+l1 = cbind(c(0, 0, 0), c(0, 1, 2))
+l2 = cbind(c(0, 0, 0), c(2, 3, 4))
+l3 = cbind(c(0, 1, 2), c(2, 2, 3))
+l4 = cbind(c(0, 1, 2), c(4, 4, 3))
+l5 = cbind(c(2, 2), c(0, 3))
+l6 = cbind(c(2, 3), c(3, 4))
+l = list(Lines(list(Line(l0)), "e"), Lines(list(Line(l1)), "a"), Lines(list(Line(l2)),                                                                  "b"), Lines(list(Line(l3)), "c"), Lines(list(Line(l4)), "d"), Lines(list(Line(l5)),                                                                                                                                            "f"), Lines(list(Line(l6)), "g"))
+
+# convert to SpatialLines and than to SpatialLinesNetwork
+sl = SpatialLines(l)
+
+sln = SpatialLinesNetwork(sl)
+
+# plot
+plot(sln@g$x, sln@g$y, col = sln@g$n, pch = 16, cex = 2, asp = 1)
+lines(sl)
+text(sln@g$x, sln@g$y, E(sln@g), pos = 4)
+```
+
+We can now calculate shortest path between any pair of points in the graph, however the names of nodes are numeric constants, which are automaticaly assigned during creation of object of class `SpatialLinesNetwork`.
+
+What if we have `SpatialLinesDataFrame`, where each link has two values -- start and end points -- assigned? For example, lets assume, that the given network are simplified roads and cities in Germany.
+
+```{r network.with.names}
+# create data frame with cities
+df <- data.frame(rbind(c('Augsburg', 'Muenchen'),
+                       c('Strasbourg', 'Frankfurt'),
+                       c('Frankfurt', 'Bremen'),
+                       c('Frankfurt', 'Leipzig'),
+                       c('Bremen', 'Leipzig'),
+                       c('Muenchen', 'Leipzig'),
+                       c('Leipzig', 'Berlin')
+                       )
+                 )
+colnames(df) <- c('startName', 'endName')
+
+# convert to SpatialLinesDataFrame
+sldf <- SpatialLinesDataFrame(sl, df, match.ID=FALSE)
+
+sldf@data
+
+# convert to SpatialLinesNetwork
+sln = SpatialLinesNetwork(sldf)
+
+# plot with names
+plot(sln@g$x, sln@g$y, col = 'grey85', pch = 16, cex = 2, asp = 1)
+lines(sl, col='grey')
+text(sln@g$x, sln@g$y, c('Augsburg', 'Muenchen', 'Strasbourg', 'Frankfurt', 'Bremen', 'Leipzig', 'Berlin'))
+```
+
+Now we can add function to calculate shortest path between two points. If names of points is given (instead of ID's of nodes), than also names of columns with names of start and end points must be provided.
+
+```{r shortest.path.function}
+# accepts: sln = SpatialLinesNetwork, from = name or id of start node, to = name or id of end node, fromColumn = name of column with names of start nodes, toColumn = name of column with names of end nodes
+sp.get.shortest.path <- function(sln, from, to, fromColumn='start', toColumn='end') {
+  
+  # if columns with start and end points are given, find matching between name of node and ID of node
+  if(fromColumn!='start' || toColumn!='end') {
+    data <- sln@sl@data
+    fromID <- c(data$start[data[fromColumn]==from],data$end[data[toColumn]==from])[1]
+    toID <- c(data$start[data[fromColumn]==to],data$end[data[toColumn]==to])[1]
+  } else {
+    fromID <- from
+    toID <- to
+  }
+  
+  # calculate shortest path, return both sequences of nodes and edges, and add names of start and and point to the result
+  sp = get.shortest.paths(sln@g, fromID, toID, output='both')
+  sp$from <- from
+  sp$to <- to
+  return(sp)
+}
+```
+
+Now we can calculate shortest path even with correct names of destination (i.e. from *Muenchen* to *Strasbourg*), but the resuls is still only a list of numeric values and strings.
+
+This next two functions do the following: transform result of `sp.get.shortest.paths` to `SpatialLines` object and allow simple plotting.
+
+```{r more.functions}
+# accepts: sln = SpatialLinesNetwork, sp = shortest path as returned by ge.shortest.path
+sp2sl <- function(sln, sp) {
+  line.sequence <- unlist(sp$epath)
+  return(sln@sl[line.sequence,])
+}
+
+# accepts: sln = SpatialLinesNetwork, sp = result of sp.get.shortest.path, zoom = plotting can be zoomed to bounding box of shortest path
+plot.sp <- function(sln, sp, zoom=FALSE) {
+  
+  # calculate shortest path and return it as a SpatialLines object
+  sp.path <- sp2sl(sln, sp)
+  
+  # extend of plotting area
+  if (zoom) {
+    bb <- bbox(sp.path)
+  } else {
+    bb <- bbox(sln@sl)
+  }
+  
+  # plotting
+  plot(sln@sl, xlim=bb[1,], ylim=bb[2,], col='grey', axes=TRUE)
+  plot(sp.path, col='orange', lwd=2, add=T)
+  points(sln@g$x, sln@g$y, col = "grey", pch=16, cex = 1.2)
+  points(sln@g$x[unlist(sp$vpath)], sln@g$y[unlist(sp$vpath)], col = "red", cex = 2)
+  
+  # additional text
+  start <- unlist(sp$vpath)[1]
+  end <- rev(unlist(sp$vpath))[1]
+  text(sln@g$x[c(start, end)], sln@g$y[c(start, end)], c("s", "e"))
+  title(paste('Shortest path from', sp$from, 'to', sp$to))
+  
+}
+```
+
+And finally examples with both `SpatialLines` and `SpatialLinesDataFrame`.
+
+```{r examples}
+# example with SpatialLinesDataFrame
+sln = SpatialLinesNetwork(sldf)
+
+sp <- sp.get.shortest.path(sln=sln, from='Muenchen', to='Strasbourg', fromColumn='startName', toColumn='endName')
+sp
+
+plot.sp(sln=sln, sp=sp, zoom=FALSE)
+
+# example with SpatialLines
+sln2 = SpatialLinesNetwork(sl)
+
+sp2 <- sp.get.shortest.path(sln=sln2, from=1, to=4)
+sp2
+
+plot.sp(sln=sln2, sp=sp2, zoom=FALSE)
+```
