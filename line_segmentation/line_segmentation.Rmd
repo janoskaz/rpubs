@@ -1,0 +1,146 @@
+Segmentation of spatial lines
+========================================================
+
+This document will show, how spatial lines in R can be cut into segments with equal length.
+
+First, we need to define a function, which accepts two-column matrix of coordinates and lenghts from and to, which clip the segment. Distances are always calculated from 0, therefore resulting segment will start at distance *start* from the beginning of the line and end at distance *end* from the beginning.
+
+```{r create.segment.function}
+CreateSegment <- function(coords, from, to){
+  distance <- 0
+  coordsOut <- c()
+  biggerThanFrom <- F
+  for(i in 1:(nrow(coords)-1)){
+    d <- sqrt((coords[i,1]-coords[i+1,1])^2 + (coords[i,2]-coords[i+1,2])^2)
+    distance <- distance + d
+    if(!biggerThanFrom && (distance>from)){
+        w <- 1-(distance-from)/d
+        x <- coords[i,1] + w*(coords[i+1,1]-coords[i,1])
+        y <- coords[i,2] + w*(coords[i+1,2]-coords[i,2])
+        coordsOut <- rbind(coordsOut,c(x,y))
+        biggerThanFrom <- T
+    }
+    if(biggerThanFrom){
+      if(distance>to){
+        w <- 1-(distance-to)/d
+        x <- coords[i,1] + w*(coords[i+1,1]-coords[i,1])
+        y <- coords[i,2] + w*(coords[i+1,2]-coords[i,2])
+        coordsOut <- rbind(coordsOut,c(x,y))
+        break
+      }
+      coordsOut <- rbind(coordsOut,c(coords[i+1,1],coords[i+1,2]))
+    }
+  }
+  return(coordsOut)
+}
+```
+
+We can try it out on dataset of coast of Kola peninsula from [mvoutlier](http://cran.r-project.org/web/packages/mvoutlier/) package.
+
+```{r kola.borders, message=FALSE}
+library(mvoutlier)
+library(maptools)
+data(kola.background)
+
+# take one part of the coast
+coast <- kola.background$coast[147:351,]
+# find segment between 25 and 45 km from the beginning
+segment <- CreateSegment(coast, 25000, 45000)
+# plot
+plot(coast, type='l')
+lines(segment, col='red', lwd=2)
+```
+
+Now, lets say we want to cut the given line to several segments with given length. Another option is to give number of desired parts (instead of their length) as an argument.
+
+```{r}
+CreateSegments <- function(coords, length=0, n.parts=0){
+  stopifnot((length>0 || n.parts>0))
+  # calculate total length line
+  total_length <- 0
+  for(i in 1:(nrow(coords)-1)){
+    d <- sqrt((coords[i,1]-coords[i+1,1])^2 + (coords[i,2]-coords[i+1,2])^2)
+    total_length <- total_length + d
+  }
+  
+  # calculate stationing of segments
+  if(length>0){
+    stationing <- c(seq(from=0, to=total_length, by=length), total_length)
+  } else {
+    stationing <- c(seq(from=0, to=total_length, length.out=n.parts), total_length)
+  }
+  
+  # calculate segments and store the in list
+  newlines <- list()
+  for(i in 1:(length(stationing)-1)){
+    newlines[[i]] <- CreateSegment(coords, stationing[i], stationing[i+1])
+  }
+  return(newlines)
+}
+```
+
+Since the actual length of line is rarely a multiple of given length, last segment is shorter. We can, however, very simply merge it with penultimate segment, if we wish.
+
+```{r merge.last}
+MergeLast <- function(lst){
+  l <- length(lst)
+  lst[[l-1]] <- rbind(lst[[l-1]], lst[[l]])
+  lst <- lst[1:(l-1)]
+  return(lst)
+}  
+```
+
+And again we can plot the results.
+
+```{r plot.segments}
+segments <- CreateSegments(coast, n.parts=40)
+segments <- MergeLast(segments)
+
+plot(coast, type='l')
+
+col='red'
+for(i in 1:length(segments)){
+  col <- ifelse(col=='red', 'black', 'red')
+  lines(as.matrix(segments[[i]]), col=col, lwd=2)
+}
+```
+
+Now, lets create SpatialLines and make function to perform segmentation on SpatialLines. Attributes of lines, even in case they are given as SpatialLinesDataFrame, are not kept. If desired length of segments is bigger than actual length of original line, the original line is returned.
+
+```{r}
+SegmentSpatialLines <-function(sl, length=0, n.parts=0, merge.last=FALSE){
+  stopifnot((length>0 || n.parts>0))
+  id <- 0
+  newlines <- list()
+  sl <- as(sl, 'SpatialLines')
+  for(lines in sl@lines){
+    for(line in lines@Lines){
+      crds <- line@coords
+      # create segments
+      segments <- CreateSegments(coords=crds, length, n.parts)
+      if(merge.last && length(segments)>1){ # in case there is only one segment, merging would result into error
+        segments <- MergeLast(segments)
+      }
+      # transform segments to lineslist for SpatialLines object
+      for(segment in segments){
+        newlines <- c(newlines, Lines(list(Line(unlist(segment))), ID=as.character(id)))
+        id <- id+1
+      }
+    }
+  }
+  return(SpatialLines(newlines))
+}
+```
+
+And finaly plot the results.
+
+```{r segmentation.of.spatial.lines}
+# take another part of the coast and create SpatialLines object
+coast2 <- kola.background$coast[353:416,]
+sl <- SpatialLines(list(Lines(list(Line(coords=coast)),ID='1'), Lines(list(Line(coords=coast2)), ID='2')))
+
+# perform segmentation
+sl2 <- SegmentSpatialLines(sl,length=5000, merge.last=TRUE)
+# plot
+plot(sl2, col=rep(c(1,2), length.out=length(sl2)), axes=T)
+```
