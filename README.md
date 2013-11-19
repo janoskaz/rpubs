@@ -16,3 +16,7 @@ Rpubs documents and sample data. My Rpubs webpage [here](http://rpubs.com/janosk
 + spatial network analysis
 
     How to transform SpatialLines to graph, which enables network analysis and to to find shortest path between two points.
+
++ segmentation of spatial lines
+
+    Functions to cut SpatialLines object into segments with even size and return them as a SpatialLines object.
