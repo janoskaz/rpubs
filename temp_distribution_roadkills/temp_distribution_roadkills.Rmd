@@ -1,0 +1,121 @@
+Temporal distribution of roadkills
+========================================================
+Roadkills are a frequent outcome of interaction of transportation and wildlife. Research shows, that animals follow certain cycles, and animal-vehicle crashes occur often around sunrise and sunset ([Haikonen and Summala, 2001](http://www.sciencedirect.com/science/article/pii/S074937970100352X)).
+
+This document shows nice way, how to visualize such data.
+
+```{r load.packages, include=FALSE, cache=FALSE}
+library(maptools)
+library(plotrix)
+```
+
+There are 30 000 roadkills available, each has recorded position, date and time.
+
+```{r load.prepare.data}
+# read data
+roadkills <- read.csv('roadkills.csv')
+str(roadkills)
+# transform date and time
+datetime <- as.POSIXct(roadkills$datetime)
+
+# calculate time as float
+hours <- as.POSIXlt(datetime)$hour 
+minutes <- as.POSIXlt(datetime)$min
+time <- hours + minutes/60
+```
+
+We can calculate time of sunrise and sunset for every accident, based on its locations (functions from package **maptools**).
+
+```{r calc.sunrise.sunset}
+# calculate sunrise and sunset for every colision
+sunrise <- sunriset(as.matrix(roadkills[,2:3]), datetime, direction='sunrise')*24
+sunset <- sunriset(as.matrix(roadkills[,2:3]), datetime, direction='sunset')*24
+```
+
+Then, we will calculate the time of sunset and sunrise through the year.
+
+```{r sunset.through.year}
+# culculate time of sunrise and sunset through the year
+center <- matrix(c(15.33, 49.75), ncol=2) # center of cyech republic as a reference points
+seq_datum <- seq.Date(from=as.Date("2010/1/1"), to=as.Date("2010/12/31"),by='day') # sequence of days
+sun <- c()
+for (i in 1:length(seq_datum)) {
+  d <- seq_datum[i]
+  sr <- sunriset(center,as.POSIXct(d), direction='sunrise')*24
+  ss <- sunriset(center,as.POSIXct(d), direction='sunset')*24
+  sun <- rbind(sun,c(sr, ss))
+}
+```
+
+And finally, plot numbers of accidents for every month and hour.
+
+```{r plot, fig.height=6, fig.width=8}
+# calculate number of accidents by month and hours
+seq1 <- c(0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365)
+seq2 <- seq(0, 24, 1)
+
+# day of year
+doy <- as.numeric(format(datetime, '%j'))
+
+counts <- c()
+for(i in 1:(length(seq1)-1)) {
+  for(j in 1:(length(seq2)-1)){
+    limit_x <- c(seq1[i], seq1[i+1])
+    limit_y <- c(seq2[j], seq2[j+1])
+    n <- sum(doy>limit_x[1] & doy<=limit_x[2] & hours>=limit_y[1] & hours<limit_y[2])
+    counts <- c(counts,n)
+  }  
+}
+
+# prepate empty plot with axes
+par(xpd=NA)
+plot(as.numeric(format(datetime, '%j')), time, pch=16, cex=.4, xlim=c(0,460), ylim=c(0,24), axes=F, xlab='Month', ylab='Hour', type='n')
+axis(side=1, at=seq(15, 365, 30), labels=c('J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'), , cex.axis=.6)
+axis(side=2, at=seq(0,24,2), labels=seq(0,24,2), cex.axis=.6)
+
+# color palette from yellow to red
+q <- quantile(range(counts),seq(0,1,.1))
+colors <- color.gradient(c(1,1), c(1,0), c(0,0), nslices=10)
+
+# plot counts
+counter <- 1
+for(i in 1:(length(seq1)-1)) {
+  for(j in 1:(length(seq2)-1)){
+    limit_x <- c(seq1[i], seq1[i+1])
+    limit_y <- c(seq2[j], seq2[j+1])
+    val <- counts[counter]
+    
+    counter2 <- 2    
+    while(val>q[counter2]){
+      counter2 <- counter2+1
+    }
+    
+    col <- colors[counter2-1]
+    
+    polygon( x=c(limit_x[1], limit_x[2], limit_x[2], limit_x[1]), y=c(limit_y[1], limit_y[1], limit_y[2], limit_y[2]), border=NA, col=col)
+    
+    counter <- counter+1
+  }  
+}
+
+# add lines of sunrise and sunset
+lines(1:365, sun[,1], lwd=2)
+lines(1:365, sun[,2], lwd=2)
+title('Daily and seasonal distribution of roadkills\nOctober 2006 - December 2012')
+
+# add legend
+counter <- 1
+seq3 <- seq(0,24, length.out=(length(colors)+1))
+for(i in 1:(length(seq2)-1)) {
+  limit_x <- c(400,430)
+  limit_y <- c(seq3[i], seq3[i+1])
+  col <- colors[counter]
+  polygon( x=c(limit_x[1], limit_x[2], limit_x[2], limit_x[1]), y=c(limit_y[1], limit_y[1], limit_y[2], limit_y[2]), border=NA, col=col)
+  counter <- counter+1
+}
+
+text(rep(445,(length(colors)+1)), seq3+0.5, adj=c(0,1),
+     labels=c('0 % = 18', '10 %', '20 %', '30 %', '40 %', '50 %', '60 %', '70 %', '80 %', '90 %', '100 % = 517'),
+     cex=.6,)
+axis(1, at=430, labels='Nr. of\nAccidents', tick=F, cex.axis=.8)
+```

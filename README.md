@@ -20,3 +20,7 @@ Rpubs documents and sample data. My Rpubs webpage [here](http://rpubs.com/janosk
 + segmentation of spatial lines
 
     Functions to cut SpatialLines object into segments with even size and return them as a SpatialLines object.
+
++ temporal distribution roadkills
+
+    Example of a nice plot.
