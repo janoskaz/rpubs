@@ -24,3 +24,7 @@ Rpubs documents and sample data. My Rpubs webpage [here](http://rpubs.com/janosk
 + temporal distribution roadkills
 
     Example of a nice plot.
+
++ *k*-shortest paths
+    
+    How to calculate k-shortest paths using variant of Yen's algorithm and `igraph` package
