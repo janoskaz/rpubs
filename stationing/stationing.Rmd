@@ -1,0 +1,135 @@
+Calculate Stationing of points on line
+========================================================
+
+R currently does not include functions to create [Linear referencing system](http://en.wikipedia.org/wiki/Linear_referencing), but it is rather straightforward to create one. This document will show functions to do so.
+
+```{r load, message=FALSE}
+# load packages
+library(maptools)
+```
+
+First, load sample points and lines.
+
+```{r fig.width=10, fig.height=10}
+# load points
+p <- readShapePoints('data/points')
+# load lines
+l <- readShapeLines('data/lines')
+
+# plot
+plot(l)
+plot(p, add=T, cex=1, pch=16, col='grey60')
+```
+
+The process of calculation of stationing includes two steps: snapping points to lines amd then calculating the position of points on the line.
+
+First: a function, which determines, if point lies on line between two another points needs to be defined for further use.
+
+```{r point.on.line}
+pointOnLine <- function(point,line_start,line_end){ # each of input parameters is pair of coordinates [x,y]
+  if(identical(point,line_start) | identical(point,line_end)){return(TRUE)} # check, if the points cooincides with start/end point
+  if(point[1]>max(c(line_start[1],line_end[1])) | point[1]<min(c(line_start[1],line_end[1])) | point[2]>max(c(line_start[2],line_end[2])) | point[2]<min(c(line_start[2],line_end[2]))){
+    return(FALSE) # if the point is out of the bounding box of the line, return false
+  }
+  if(line_start[2]==line_end[2]){
+    slope<-0
+  } else if(line_start[1]==line_end[1]){
+    return(T)
+  } else {
+    slope <- (line_start[2]-line_end[2])/(line_start[1]-line_end[1])
+  }
+  intercept <- -slope*line_start[1] + line_start[2]
+  onLine <- round(point[2],digits=0)==round((slope*point[1]+intercept),digits=0)
+  return(onLine)
+}
+```
+
+Than, a function, which calculates the stationing:
+
+```{r calculate.stationing}
+calculateStationing <- function(points, lines, maxDist=NA){
+  
+  # snap points to lines from package maptools
+  snapped <- snapPointsToLines(points, lines, maxDist, withAttrs=TRUE)
+  
+  
+  stationing <- c()
+  
+  for (i in 1:length(snapped)){
+    crds_p <- coordinates(snapped[i,])
+    line <- lines[snapped[i,]$nearest_line_id,]
+    crds_l <- coordinates(line)[[1]][[1]]
+    d <- 0
+    for(j in 2:nrow(crds_l)){
+      onLine <- pointOnLine(point=crds_p,line_start=crds_l[j-1,],line_end=crds_l[j,])
+      if(onLine){
+        d0 <- sqrt((crds_p[1]-crds_l[j-1,1])^2 + (crds_p[2]-crds_l[j-1,2])^2)
+        stationing <- c(stationing,round(d+d0))
+        break
+      }
+      d <- d + sqrt((crds_l[j,1]-crds_l[j-1,1])^2 + (crds_l[j,2]-crds_l[j-1,2])^2)
+    }
+  }
+  
+  snapped$stationing <- stationing
+  return(snapped)
+}
+```
+
+However, function `snapPointsToLines` includes a (possible) bug, so it needs to be redefined:
+
+```{r}
+snapPointsToLines <- function (points, lines, maxDist = NA, withAttrs = TRUE) 
+{
+    require("rgeos")
+    if (is(points, "SpatialPoints") && missing(withAttrs)) 
+        withAttrs = FALSE
+    if (!is.na(maxDist)) {
+        w = gWithinDistance(points, lines, dist = maxDist, byid = TRUE)
+        validPoints = apply(w, 2, any)
+        validLines = apply(w, 1, any)
+        points = points[validPoints, ]
+        lines = lines[validLines, ]
+    }
+    d = gDistance(points, lines, byid = TRUE)
+    nearest_line_index = apply(d, 2, which.min)
+    coordsLines = coordinates(lines)
+    coordsPoints = coordinates(points)
+    mNewCoords = vapply(1:length(points), function(x) nearestPointOnLine(coordsLines[[nearest_line_index[x]]][[1]], 
+        coordsPoints[x, ]), FUN.VALUE = c(0, 0))
+    if (!is.na(maxDist)) 
+        nearest_line_id = as.numeric(rownames(d)[nearest_line_index]) + 
+            1
+    else nearest_line_id = nearest_line_index
+    if (withAttrs) 
+        df = cbind(points@data, nearest_line_id)
+    else df = data.frame(nearest_line_id, row.names = names(nearest_line_index))
+    SpatialPointsDataFrame(coords = t(mNewCoords), data = df, 
+        proj4string = CRS(proj4string(points)))
+}
+```
+
+And finally we can calculate the stationing of real data:
+
+```{r calculate.stationing2}
+#calculate stationing
+snapped.p <- calculateStationing(p,l)
+head(snapped.p@data)
+```
+
+For better vizualization, we can also connect original points with their snapped self. (**Note:** This works only if no `maxDist` was set)
+
+```{r connector.lines, fig.width=10, fig.height=10}
+# create connector lines
+connector.lines <- list()
+for (i in 1:length(p)){
+  connector.lines[[i]] <- Lines(slinelist=list(Line(coords=rbind(coordinates(p[i,]), coordinates(snapped.p[i,])))) ,ID=as.character(i))
+}
+connector.lines <- SpatialLines(connector.lines)
+
+# plot zoomed out area
+plot(l, axes=T, xlim=c(-515000, -510000), ylim=c(-1188000, -1186000))
+plot(p, pch=16, add=T)
+plot(snapped.p, pch=16, add=T, col='red')
+plot(connector.lines, add=T, col='grey30', lty=3)
+```

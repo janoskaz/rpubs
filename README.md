@@ -28,3 +28,7 @@ Rpubs documents and sample data. My Rpubs webpage [here](http://rpubs.com/janosk
 + *k*-shortest paths
     
     How to calculate k-shortest paths using variant of Yen's algorithm and `igraph` package
+    
++ calculate stationing
+    
+    Create simple Linear Referencing System - snap points to lines and calculate their stationing (position from the start) 
